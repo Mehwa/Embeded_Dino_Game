@@ -1,0 +1,385 @@
+//v1
+//*****************************************************************************
+//   임베디드 프로세서 응용 - 이종원 교수님
+//  박강규
+//  박고언
+//  김대웅
+//
+//*****************************************************************************
+
+#include <stdbool.h>
+#include <stdint.h>
+#include "inc/hw_memmap.h"
+#include "inc/hw_types.h"
+#include "inc/hw_nvic.h"
+#include "inc/hw_ints.h"
+#include "inc/hw_i2c.h"
+#include "inc/hw_types.h"
+
+#include "driverlib/rom.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/gpio.h"
+#include "driverlib/systick.h"
+#include "driverlib/timer.h"
+#include "driverlib/pin_map.h"
+#include "driverlib/interrupt.h"
+#include "driverlib/uart.h"
+#include "driverlib/debug.h"
+#include "driverlib/i2c.h"
+
+
+#include "inc/hw_memmap.h"
+#include "inc/hw_nvic.h"
+#include "inc/hw_types.h"
+#include "driverlib/rom.h"
+#include "driverlib/rom_map.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/uart.h"
+#include "grlib/grlib.h"
+#include "grlib/widget.h"
+#include "drivers/frame.h"
+#include "drivers/kentec320x240x16_ssd2119.h"
+#include "drivers/pinout.h"
+#include "drivers/touch.h"
+
+#define GROUNDBOUND 170
+#define UPBOUND 120
+#define INIT_LOCATION 350
+
+void Timer0AIntHandler(void); // For GPTM INT
+
+float obstacle_X = 0;
+int timenum=0;
+int DpointX = 120, DpointY = 200; // 공룡의 x좌표와 y좌표
+int OpointX = 350, OpointY = 150; // 장애물의 x좌표와 y좌표
+//*****************************************************************************
+//
+// Google Dinosaur Game
+//
+//*****************************************************************************
+
+//*****************************************************************************
+//
+// A global we use to keep track of when the user presses the screen.
+//
+//*****************************************************************************
+volatile bool touched = false;
+int state=0;
+//*****************************************************************************
+//
+// The error routine that is called if the driver library encounters an error.
+//
+//*****************************************************************************
+#ifdef DEBUG
+void
+__error__(char *pcFilename, unsigned long ulLine)
+{
+}
+#endif
+
+//*****************************************************************************
+//
+// This function is called in interrupt context by the touch screen driver when
+// there is a pointer event.
+//
+//*****************************************************************************
+int32_t
+TSHandler(uint32_t ui32Message, int32_t i32X, int32_t i32Y)
+{
+    //
+    // See if this is a pointer up message.
+    //
+    if(ui32Message == WIDGET_MSG_PTR_UP)
+    {
+        //
+        // The screen has been pressed and released
+        //
+        touched = true;
+        state = 1;
+    }
+
+    //
+    // Success.
+    //
+    return(0);
+}
+
+
+
+
+int dinosaur[8][10] = {
+     {0,0,0,0,0,1,1,1,0,0},
+     {0,0,0,0,1,1,0,1,1,0},
+     {0,0,0,0,1,1,1,1,1,0},
+     {1,0,0,0,1,1,1,1,0,0},
+     {1,1,0,0,1,1,1,1,1,1},
+     {1,1,0,0,0,1,1,1,0,0},
+     {0,1,1,1,1,1,1,1,0,0},
+     {0,0,0,0,1,1,0,0,0,0}
+};
+
+int obstacle[10][2] = {
+      {1,1},
+      {1,1},
+      {1,1},
+      {1,1},
+      {1,1},
+      {1,1},
+      {1,1},
+      {1,1},
+      {1,1},
+      {1,1}
+};
+
+tContext sContext;
+void checkCrash()
+{
+   //if(DpointX DpointY OpointX OpointY)
+   if((DpointX <= OpointX && OpointX <= DpointX + 15) && (OpointY <= DpointY && DpointY <= OpointY + 50))
+   {
+      drawDinosaur(DpointY);
+      drawObstacle((int)OpointX);
+      GrContextForegroundSet(&sContext, ClrGreen);
+      GrContextFontSet(&sContext, g_psFontCm20);
+      GrStringDrawCentered(&sContext, "Game Over", -1,
+      GrContextDpyWidthGet(&sContext) / 2,
+      GrContextDpyHeightGet(&sContext) / 10 + 50, 0);
+      SysCtlDelay(120000000);
+   }
+}
+void drawObstacle(int x2)
+{
+    int i, j, x;
+    int y = GROUNDBOUND;
+      GrContextForegroundSet(&sContext, ClrSilver);   // 파란색으로
+      for(i = 0; i < 10; i++){
+         x = x2;
+        for(j = 0; j < 2; j++){
+           if(dinosaur[i][j] == 1){
+              GrContextFontSet(&sContext, g_psFontCm12);
+              GrStringDraw(&sContext, "-", -1, x, y, 0);
+           }
+           x += 2.5;
+        }
+        y += 3;
+      }
+}
+
+void clear()
+{
+   SysCtlDelay(100000);
+   int i;
+   GrFlush(&sContext);
+   GrContextForegroundSet(&sContext, ClrBlack);
+   for(i = 100; i < 200; i++){ //for LCD Background Reset
+      GrContextFontSet(&sContext, g_psFontCm12);
+      GrLineDraw(&sContext, 0, i, 380, i);
+   }
+}
+void drawDinosaur(float y2)
+{
+
+   int i, j, x;
+   int y;
+   GrContextForegroundSet(&sContext, ClrBlue);   // 파란색으로
+   for(i = 0,y = y2; i < 8; i++, y += 3){
+      x = 120;
+     for(j = 0; j < 10; j++){
+        if(dinosaur[i][j] == 1){
+           GrContextFontSet(&sContext, g_psFontCm12);
+           GrStringDraw(&sContext, "-", -1, x, y, 0);
+
+        }
+        x += 2.5;
+     }
+   }
+}
+
+/*void deleteDinosaur(float x, int y2){
+   int i, j, y;
+     GrContextForegroundSet(&sContext, ClrBlack);
+      for(i = 0,y = y2; i < 8; i++, y += 3){
+         x = 120;
+
+        for(j = 0; j < 10; j++){
+           if(dinosaur[i][j] == 1){
+              GrContextFontSet(&sContext, g_psFontCm12);
+              GrStringDraw(&sContext, "-", -1, x, y, 0);
+              x += 2.5;
+           }
+           else{
+            GrContextFontSet(&sContext, g_psFontCm12);
+            GrStringDraw(&sContext, " ", -1, x, y, 0);
+            x += 2.5;
+           }
+        }
+    }
+}*/
+/*void deleteObstacle(int x)
+{
+   int k;
+   GrContextForegroundSet(&sContext, ClrBlack);
+   for(k = x; k < 300; k+=60){
+      GrStringDraw(&sContext, "  ****", -1, k, 190, 0);
+      GrStringDraw(&sContext, "  ****", -1, k, 192, 0);
+      GrStringDraw(&sContext, "  ****", -1, k, 194, 0);
+    }
+}*/
+
+
+void jump()
+{
+   int y = GROUNDBOUND;
+   while(1){
+      drawDinosaur(y);
+      drawObstacle(obstacle_X);
+      clear();
+      y -= 3;
+      obstacle_X -= 3;
+      DpointY = y;
+      OpointX = obstacle_X;
+      checkCrash();
+      if(obstacle_X < 0) obstacle_X = INIT_LOCATION;
+      if(y <= UPBOUND) break;
+    }
+
+     while(1){
+      drawDinosaur(y);
+      drawObstacle(obstacle_X);
+      clear();
+      y += 3;
+      obstacle_X -= 3;
+      DpointY = y;
+     OpointX = obstacle_X;
+      checkCrash();
+      if(obstacle_X < 0) obstacle_X = INIT_LOCATION;
+      if(y >= GROUNDBOUND) break;
+     }
+}
+
+/*void moveObstacle(int pointX)
+{
+   if(pointX < 0)
+      generalX = 200;
+   drawObstacle(pointX);
+   SysCtlDelay(500000);
+   deleteObstacle(pointX);
+   SysCtlDelay(500000);
+   generalX -= 1;
+}*/
+
+int main(void)
+{
+    uint32_t ui32SysClock;
+    uint32_t ulIdy;
+    int i,j,y;
+    float x;
+
+
+    ui32SysClock = MAP_SysCtlClockFreqSet((SYSCTL_XTAL_25MHZ |
+                                           SYSCTL_OSC_MAIN | SYSCTL_USE_PLL |
+                                           SYSCTL_CFG_VCO_480), 120000000);
+    PinoutSet();
+    Kentec320x240x16_SSD2119Init(ui32SysClock);
+
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+
+   TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
+   TimerLoadSet(TIMER0_BASE, TIMER_A, 120000000-1);
+
+   //I2CMasterIntEnableEx(I2C6_BASE, I2C_SLAVE_INT_DATA);
+   TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+   //IntEnable(INT_I2C6);
+  // IntEnable(INT_TIMER0A);
+   //IntMasterEnable();
+
+   //TimerEnable(TIMER0_BASE, TIMER_A);
+
+    GrContextInit(&sContext, &g_sKentec320x240x16_SSD2119);
+    TouchScreenInit(ui32SysClock);
+
+    TouchScreenCallbackSet(TSHandler);
+
+    GrContextForegroundSet(&sContext,
+                (((((240 - ulIdy) * 255) / 240) <<ClrRedShift) |
+                 (((ulIdy * 255) /240) <<ClrGreenShift)));
+     GrLineDraw(&sContext, 0, 5, 319, 5);
+
+     GrLineDraw(&sContext, 0, 200, 319, 200);
+
+     GrContextForegroundSet(&sContext, ClrBlue);
+     GrContextFontSet(&sContext, g_psFontCm20);
+     GrStringDrawCentered(&sContext, "Google Dinosaur Game!", -1,
+   GrContextDpyWidthGet(&sContext) / 2,
+   GrContextDpyHeightGet(&sContext) / 10, 0);
+
+
+//obstacles
+
+
+     //Flush any cached drawing operation
+     GrFlush(&sContext);
+
+    obstacle_X = INIT_LOCATION;
+    while(1)
+    {
+       drawDinosaur(GROUNDBOUND);
+       drawObstacle(obstacle_X);
+       clear();
+      obstacle_X -= 2.5;
+      OpointX = obstacle_X;
+      checkCrash();
+      if(obstacle_X < 0) obstacle_X = INIT_LOCATION;
+       while(!touched) // touch 하기 전 공룡은 가만히 있고 장애물만 왼쪽으로 계속 이동
+       {
+          drawDinosaur(GROUNDBOUND);
+          drawObstacle(obstacle_X);
+          clear();
+          obstacle_X -= 2.5;
+          OpointX = obstacle_X;
+          checkCrash();
+          if(obstacle_X < 0) obstacle_X = INIT_LOCATION;
+       }
+
+       if(state)
+       {
+          jump();
+             state=0;
+       }
+
+    }
+}
+
+void Timer0AIntHandler(void)
+{
+   int i=0;
+   TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+   GrContextForegroundSet(&sContext, ClrBlack);
+   for(i=5; i<50; i++) //for LCD Background Reset
+      GrLineDraw(&sContext, 80, 50+i, 280, 50+i);
+   GrContextForegroundSet(&sContext, ClrBrown);
+   timenum++;
+
+   if(timenum==1)
+      GrStringDraw(&sContext, "1", -1, 80, 100, 0);
+   else if(timenum==2)
+      GrStringDraw(&sContext, "2", -1, 80, 100, 0);
+   else if(timenum==3)
+      GrStringDraw(&sContext, "3", -1, 80, 100, 0);
+   else if(timenum==4)
+      GrStringDraw(&sContext, "4", -1, 80, 100, 0);
+   else if(timenum==5)
+      GrStringDraw(&sContext, "5", -1, 80, 100, 0);
+   else if(timenum==6)
+      GrStringDraw(&sContext, "6", -1, 80, 100, 0);
+   else if(timenum==7)
+      GrStringDraw(&sContext, "7", -1, 80, 100, 0);
+   else if(timenum==8)
+      GrStringDraw(&sContext, "8", -1, 80, 100, 0);
+   else
+      GrStringDraw(&sContext, "10", -1, 80, 100, 0);
+
+
+}
