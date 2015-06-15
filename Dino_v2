@@ -1,0 +1,399 @@
+//v2
+//*****************************************************************************
+//  임베디드 프로세서 응용 - 이종원 교수님
+//  박강규
+//  박고언
+//  김대웅
+//
+//*****************************************************************************
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
+
+#include "inc/hw_memmap.h"
+#include "inc/hw_types.h"
+#include "inc/hw_nvic.h"
+#include "inc/hw_ints.h"
+#include "inc/hw_i2c.h"
+#include "inc/hw_types.h"
+
+#include "driverlib/rom.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/gpio.h"
+#include "driverlib/systick.h"
+#include "driverlib/timer.h"
+#include "driverlib/pin_map.h"
+#include "driverlib/interrupt.h"
+#include "driverlib/uart.h"
+#include "driverlib/debug.h"
+#include "driverlib/i2c.h"
+#include "driverlib/rom_map.h"
+#include "driverlib/sysctl.h"
+#include "driverlib/uart.h"
+
+#include "grlib/grlib.h"
+#include "grlib/widget.h"
+#include "drivers/frame.h"
+#include "drivers/kentec320x240x16_ssd2119.h"
+#include "drivers/pinout.h"
+#include "drivers/touch.h"
+
+void Timer0AIntHandler(void); // For GPTM INT
+int timenum=0;
+int timehit=1;
+
+//*****************************************************************************
+//
+// Google Dinosaur Game
+//
+//*****************************************************************************
+
+//*****************************************************************************
+//
+// A global we use to keep track of when the user presses the screen.
+//
+//*****************************************************************************
+volatile bool touched = false;
+int state=0;
+tContext sContext;
+
+//*****************************************************************************
+//
+// The error routine that is called if the driver library encounters an error.
+//
+//*****************************************************************************
+#ifdef DEBUG
+void
+__error__(char *pcFilename, unsigned long ulLine)
+{
+}
+#endif
+
+//*****************************************************************************
+//
+// This function is called in interrupt context by the touch screen driver when
+// there is a pointer event.
+//
+//*****************************************************************************
+int32_t
+TSHandler(uint32_t ui32Message, int32_t i32X, int32_t i32Y)
+{
+    //
+    // See if this is a pointer up message.
+    //
+    if(ui32Message == WIDGET_MSG_PTR_UP)
+    {
+        //
+        // The screen has been pressed and released
+        //
+        touched = true;
+        state = 1;
+    }
+
+    //
+    // Success.
+    //
+    return(0);
+}
+
+int dinosaur[8][10] = {
+     {0,0,0,0,0,1,1,1,0,0},
+     {0,0,0,0,1,1,0,1,1,0},
+     {0,0,0,0,1,1,1,1,1,0},
+     {1,0,0,0,1,1,1,1,0,0},
+     {1,1,0,0,1,1,1,1,1,1},
+     {1,1,0,0,0,1,1,1,0,0},
+     {0,1,1,1,1,1,1,1,0,0},
+     {0,0,0,0,1,1,0,0,0,0}
+};
+
+//Initial Map
+int map[100] = {50, 100, 160, 220, 270, 350, 400, 450, 510, 560,
+				660, 710, 760, 820, 900, 950, 1000, 1050, 1110, 1160,
+				1220, 1270, 1350, 1400, 1450, 1510, 1590, 1650, 1700,
+				1820, 1970, 2020, 2090, 2150, 2200, 2270, 2350, 2400,
+				2450, 2500, 2550, 2600, 2670, 2740, 2850, 2900, 3000,
+				3050, 3110, 3180, 3260, 3310, 3360, 3420, 3500, 3550,
+				4000, 4050, 4110, 4180, 4250, 4300, 4350, 4400, 4450,
+				4500, 4560, 4570, 4630, 4700, 4750, 4800, 4860, 4930,
+				5000, 5050, 5120, 5170, 5230, 5300, 5350, 5400, 5460,
+				5510, 5570, 5630, 5700, 5760, 5820, 5900, 5950, 6000
+};
+
+void ChangeMap(int* map){
+	int i = 0;
+	map[i] = 50;	//The first obstacle
+	srand (time(NULL));
+	for(i = 1; i<100; i++){
+		map[i] = map[i-1] + rand()%50 + 50;	//obstacle = previous + 50~100
+	}
+}
+
+void drawMap(int* map, int move){
+	int k;
+	 GrContextForegroundSet(&sContext, ClrSilver);
+	 for(k = 0; k < 100; k++){
+		GrStringDraw(&sContext, "****", -1, map[k] - move, 190, 0);
+		GrStringDraw(&sContext, "****", -1, map[k] - move, 192, 0);
+		GrStringDraw(&sContext, "****", -1, map[k] - move, 194, 0);
+	}
+}
+
+void eraseMap(int* map, int move){
+	int k, i;
+	GrContextForegroundSet(&sContext, ClrBlack);
+	for(k = 0; k < 100; k++){
+		for(i=0; i<10; i++) //for LCD Background Reset
+		   GrLineDraw(&sContext, map[k] - move, 190+i, map[k] - move+10, 190+i);
+	}
+}
+
+
+void drawDinosaur(float x, int y2)
+{//공룡의 가로 길이 25 세로 높이 30
+
+   int i, j, y;
+   GrContextForegroundSet(&sContext, ClrGreen);
+   for(i = 0,y = y2; i < 8; i++, y += 3){
+      x = 120;
+
+     for(j = 0; j < 10; j++){
+        if(dinosaur[i][j] == 1){
+           GrContextFontSet(&sContext, g_psFontCm12);
+           GrStringDraw(&sContext, "-", -1, x, y, 0);
+           x += 2.5;
+        }
+        else{
+         GrContextFontSet(&sContext, g_psFontCm12);
+         GrStringDraw(&sContext, " ", -1, x, y, 0);
+         x += 2.5;
+        }
+     }
+   }
+}
+
+void delete(float x, int y2){
+   int i, j, y;
+     GrContextForegroundSet(&sContext, ClrBlack);
+      for(i = 0,y = y2; i < 8; i++, y += 3){
+         x = 120;
+
+        for(j = 0; j < 10; j++){
+           if(dinosaur[i][j] == 1){
+              GrContextFontSet(&sContext, g_psFontCm12);
+              GrStringDraw(&sContext, "-", -1, x, y, 0);
+              x += 2.5;
+           }
+           else{
+            GrContextFontSet(&sContext, g_psFontCm12);
+            GrStringDraw(&sContext, " ", -1, x, y, 0);
+            x += 2.5;
+           }
+        }
+    }
+}
+
+void jump(int y)
+{
+   while(1){
+      drawDinosaur(120, y);
+      SysCtlDelay(2000000);
+      delete(120, y);
+      y -= 3;
+      if(y <= 130) break;
+    }
+
+     while(1){
+      drawDinosaur(120, y);
+      SysCtlDelay(2000000);
+      delete(120, y);
+      y += 3;
+      if(y >= 160) break;
+     }
+}
+
+//장애물 그리기 GPTM에서 함수 콜하기 위해 만들어놓은 함수
+
+//void obtacles(int k)
+//{
+//    GrContextForegroundSet(&sContext, ClrSilver);
+//    GrContextFontSet(&sContext, g_psFontCm12);
+//	if(k>319)
+//	{
+//		k=k%319;
+//		GrStringDraw(&sContext, "  ****", -1, k, 188, 0);
+//	    GrStringDraw(&sContext, "  ****", -1, k, 190, 0);
+//	    GrStringDraw(&sContext, "  ****", -1, k, 192, 0);
+//	    GrStringDraw(&sContext, "  ****", -1, k, 194, 0);
+//	}
+//	else
+//	{
+//		GrStringDraw(&sContext, "  ****", -1, k, 188, 0);
+//	    GrStringDraw(&sContext, "  ****", -1, k, 190, 0);
+//	    GrStringDraw(&sContext, "  ****", -1, k, 192, 0);
+//	    GrStringDraw(&sContext, "  ****", -1, k, 194, 0);
+//	}
+//}
+
+
+    //GrContextFontSet(&sContext, g_psFontCm12);
+
+    //GrContextFontSet(&sContext, g_psFontCm12);
+
+    //GrContextFontSet(&sContext, g_psFontCm12);
+
+
+
+
+
+int
+main(void)
+{
+    uint32_t ui32SysClock;
+    uint32_t ulIdy;
+    int y, k;
+
+    ui32SysClock = MAP_SysCtlClockFreqSet((SYSCTL_XTAL_25MHZ |
+                                           SYSCTL_OSC_MAIN | SYSCTL_USE_PLL |
+                                           SYSCTL_CFG_VCO_480), 120000000);
+    PinoutSet();
+    Kentec320x240x16_SSD2119Init(ui32SysClock);
+
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+
+   TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
+   TimerLoadSet(TIMER0_BASE, TIMER_A, 120000000-1);
+
+   //I2CMasterIntEnableEx(I2C6_BASE, I2C_SLAVE_INT_DATA);
+   TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+
+   //IntEnable(INT_I2C6);
+   IntEnable(INT_TIMER0A);
+   IntMasterEnable();
+
+   TimerEnable(TIMER0_BASE, TIMER_A);
+
+    GrContextInit(&sContext, &g_sKentec320x240x16_SSD2119);
+
+//Touch Screen
+
+    TouchScreenInit(ui32SysClock);
+
+    TouchScreenCallbackSet(TSHandler);
+
+
+//Background
+    GrContextForegroundSet(&sContext,
+                (((((240 - ulIdy) * 255) / 240) <<ClrRedShift) |
+                 (((ulIdy * 255) /240) <<ClrGreenShift)));
+     GrLineDraw(&sContext, 0, 5, 319, 5);
+
+     GrLineDraw(&sContext, 0, 200, 319, 200);
+
+     GrContextForegroundSet(&sContext, ClrBlue);
+     GrContextFontSet(&sContext, g_psFontCm20);
+     GrStringDrawCentered(&sContext, "Google Dinosaur Game!", -1,
+                GrContextDpyWidthGet(&sContext) / 2,
+                GrContextDpyHeightGet(&sContext) / 10, 0);
+
+     GrContextForegroundSet(&sContext, ClrRed);
+     GrContextFontSet(&sContext, g_psFontCm12);
+	 GrStringDraw(&sContext, "Record : ", -1, 165, 55, 0);
+	 GrContextForegroundSet(&sContext, ClrGold);
+	 GrStringDraw(&sContext, "280", -1, 220, 55, 0);
+
+	 GrContextForegroundSet(&sContext, ClrRed);
+     GrContextFontSet(&sContext, g_psFontCm12);
+     GrStringDraw(&sContext, "Score : ", -1, 250, 55, 0);
+
+     GrContextForegroundSet(&sContext, ClrBlue);
+     GrContextFontSet(&sContext, g_psFontCm12);
+     GrStringDrawCentered(&sContext, "===Progress===", -1,
+                     GrContextDpyWidthGet(&sContext) / 2,
+                     GrContextDpyHeightGet(&sContext) *9 / 10, 0);
+
+
+
+//obstacels
+     ChangeMap(map);
+
+//     GrContextForegroundSet(&sContext, ClrSilver);
+//     for(k = 0; k < 100; k++){
+//		GrStringDraw(&sContext, "  ****", -1, map[k], 190, 0);
+//		GrStringDraw(&sContext, "  ****", -1, map[k], 192, 0);
+//		GrStringDraw(&sContext, "  ****", -1, map[k], 194, 0);
+//	}
+
+
+    GrFlush(&sContext);
+	y = 160;
+	drawDinosaur(120, y);
+	int i = 0;
+    while(1)
+    {
+    	eraseMap(map, i-10);
+		drawMap(map, i);
+		eraseMap(map, i+10);
+		i++;
+
+    	while(!touched){
+			eraseMap(map, i-10);
+			drawMap(map, i);
+			eraseMap(map, i+10);
+			i++;
+    	}
+
+    	if(state)
+    	{
+    		jump(y);
+			drawDinosaur(120, y);
+			state=0;
+    	}
+
+    }
+}
+
+
+
+void Timer0AIntHandler(void)
+{
+	int i=0;
+	char time[20] = {0};
+	int temp = 0;
+	TimerIntClear(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
+//progress bar
+//	GrContextFontSet(&sContext, g_psFontCm12);
+//	if(timenum>319)
+//	{
+//		timenum=timenum%319;
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 202, 0);
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 204, 0);
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 206, 0);
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 208, 0);
+//	}
+//	else
+//	{
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 202, 0);
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 204, 0);
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 206, 0);
+//		GrStringDraw(&sContext, "  ****", -1, timenum, 208, 0);
+//	}
+	GrContextForegroundSet(&sContext, ClrBlack);
+	for (i = 0; i<50; i++) //for LCD Background Reset
+		GrLineDraw(&sContext, 290, 50 + i, 360, 50 + i);
+	GrContextForegroundSet(&sContext, ClrSilver);
+	timenum++;
+	temp = timenum;
+
+	sprintf(time, "%d", temp);
+	GrStringDraw(&sContext, time, -1, 300, 55, 0);
+}
+
+
+
+
+
+
